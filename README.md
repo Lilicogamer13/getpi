@@ -1,4 +1,4 @@
-# ⚡ getpi: Super-Optimized GPU-Native Pi Calculator
+# getpi: Super-Optimized GPU-Native Pi Calculator
 
 A high-performance Pi calculator written in Rust that runs **entirely on the GPU** via **WebGPU (wgpu)** compute shaders.
 

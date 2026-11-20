@@ -22,11 +22,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
             asset: getpi-linux-x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
             asset: getpi-linux-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -50,10 +50,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -92,11 +88,13 @@ jobs:
           cat > notes.md <<'EOF'
           | File | Platform |
           |---|---|
-          | `getpi-linux-x86_64` | Linux, 64-bit Intel/AMD (static, runs on glibc and musl distros) |
-          | `getpi-linux-aarch64` | Linux, 64-bit ARM (Raspberry Pi 3/4/5 on a 64-bit OS, ARM servers) |
+          | `getpi-linux-x86_64` | Linux, 64-bit Intel/AMD (glibc 2.35+, needs Vulkan drivers) |
+          | `getpi-linux-aarch64` | Linux, 64-bit ARM (glibc 2.35+, e.g. Raspberry Pi on a 64-bit OS) |
           | `getpi-windows-x86_64.exe` | Windows, 64-bit |
           | `getpi-macos-arm64` | macOS, Apple Silicon (M1 and later) |
           | `getpi-macos-x86_64` | macOS, Intel |
+
+          Other platforms (e.g. musl/Alpine): `cargo install --git ${{ github.server_url }}/${{ github.repository }}`
           EOF
 
       - name: Create release

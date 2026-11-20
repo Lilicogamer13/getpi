@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE*'
+      - '.gitignore'
   workflow_dispatch:
 
 permissions:
@@ -43,6 +47,10 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - name: Install musl tools
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -79,6 +87,18 @@ jobs:
           next=$(( ${latest:-0} + 1 ))
           echo "tag=v$next" >> "$GITHUB_OUTPUT"
 
+      - name: Write release notes
+        run: |
+          cat > notes.md <<'EOF'
+          | File | Platform |
+          |---|---|
+          | `getpi-linux-x86_64` | Linux, 64-bit Intel/AMD (static, runs on glibc and musl distros) |
+          | `getpi-linux-aarch64` | Linux, 64-bit ARM (Raspberry Pi 3/4/5 on a 64-bit OS, ARM servers) |
+          | `getpi-windows-x86_64.exe` | Windows, 64-bit |
+          | `getpi-macos-arm64` | macOS, Apple Silicon (M1 and later) |
+          | `getpi-macos-x86_64` | macOS, Intel |
+          EOF
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,4 +106,4 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" dist/* \
             --target "$GITHUB_SHA" \
             --title "Release ${{ steps.version.outputs.tag }}" \
-            --generate-notes
+            --notes-file notes.md

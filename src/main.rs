@@ -1,6 +1,8 @@
 mod bbp;
 mod decimal;
 mod gpu;
+#[cfg(test)]
+mod tests;
 
 use clap::{Parser, ValueEnum};
 use std::fs::File;
@@ -60,7 +62,7 @@ struct Args {
     output: PathBuf,
 }
 
-fn format_with_commas(n: usize) -> String {
+pub(crate) fn format_with_commas(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     let rem = s.len() % 3;

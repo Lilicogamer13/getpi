@@ -8,9 +8,10 @@ A high-performance Pi calculator written in Rust that runs **entirely on the GPU
 - **In-Place Live TTY Output**: Displays real-time progress (digits calculated, digits/sec, elapsed time) on a single updating line without repeating or scrolling lines.
 - **Real-Time Streaming to Disk**: Streams calculated digits to `pi.txt` (or custom `-o` path).
 - **Graceful Shutdown**: Intercepts `Ctrl+C` cleanly to flush buffers, preserve progress, and exit.
+- **Exact Digit Count**: Output never exceeds the requested digit limit, even when the GPU dispatches more than needed.
 - **Dual Computation Modes**:
   - `decimal` (default): Exact decimal digits (`3.1415926535...`) via an integer spigot pipeline running directly in GPU VRAM with zero floating-point error.
-  - `hex`: Massively parallel Bailey–Borwein–Plouffe (BBP) formula (`3.243F6A88...`) with Neumaier compensated summation, saturating thousands of GPU cores simultaneously.
+  - `hex`: Massively parallel Bailey-Borwein-Plouffe (BBP) formula (`3.243F6A88...`) with Neumaier compensated summation, saturating thousands of GPU cores simultaneously.
 
 ---
 
@@ -65,3 +66,74 @@ Options:
   -h, --help                     Print help
   -V, --version                  Print version
 ```
+
+---
+
+## Running the Tests
+
+The test suite is split into two tiers so it works everywhere, with or without a GPU.
+
+### CPU-only tests (always run, no GPU required)
+
+These cover all pure-logic code: number formatting, digit trimming helpers, block
+formatting, hex-character tables, and known Pi digit reference checks.
+
+```bash
+cargo test
+```
+
+Expected output:
+
+```
+running 32 tests
+test tests::bbp_helpers::bbp_trim_at_limit ... ok
+test tests::bbp_helpers::hex_chars_values ... ok
+...
+test result: ok. 32 passed; 0 failed; 0 ignored
+```
+
+### GPU integration tests (opt-in)
+
+These tests actually dispatch compute shaders and verify correctness: exact digit
+counts, known prefix checks for both decimal and hex modes, `is_finished()` state,
+and GPU adapter selection.
+
+Enable them with the `gpu_tests` feature flag:
+
+```bash
+cargo test --features gpu_tests
+```
+
+#### Selecting which GPU to test on
+
+By default the tests use the same auto-selection logic as the main binary
+(Discrete GPU first, then Integrated, then first available).
+
+To target a specific GPU, set the `GETPI_TEST_GPU` environment variable to the
+index shown by `--list-devices`:
+
+```bash
+# See available GPUs and their indices
+./target/release/getpi --list-devices
+#   [0] NVIDIA RTX 4090   | Discrete GPU     | Vulkan
+#   [1] Intel Iris Xe     | Integrated GPU   | Vulkan
+#   [2] llvmpipe          | CPU Rasterizer   | Vulkan
+
+# Run GPU tests on adapter index 1
+GETPI_TEST_GPU=1 cargo test --features gpu_tests
+
+# See which adapter was selected during each test
+GETPI_TEST_GPU=0 cargo test --features gpu_tests -- --nocapture
+# [gpu_test] Using adapter [0]: NVIDIA RTX 4090 (DiscreteGpu, Vulkan)
+```
+
+| `GETPI_TEST_GPU` value | Behaviour |
+|------------------------|-----------|
+| Unset or empty         | Auto-selects best available GPU |
+| `0`, `1`, `2`, ...     | Uses that exact adapter index |
+| Non-numeric string     | Test panics immediately with a descriptive error |
+| Out-of-range index     | Test fails with a descriptive error |
+| No GPU present at all  | All GPU tests are skipped gracefully |
+
+No test hard-codes any vendor name, backend, or adapter index - GPU selection is
+always driven by the runtime environment or the `GETPI_TEST_GPU` variable.

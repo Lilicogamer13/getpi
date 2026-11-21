@@ -3,6 +3,11 @@ name = "getpi"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Enable GPU integration tests (requires a wgpu-compatible GPU at test time).
+# Run with: cargo test --features gpu_tests
+gpu_tests = []
+
 [dependencies]
 wgpu = "30.0.2"
 bytemuck = { version = "1.25.2", features = ["derive"] }

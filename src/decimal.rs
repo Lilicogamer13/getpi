@@ -1,6 +1,54 @@
 use crate::gpu::GpuContext;
 use wgpu::*;
 
+// ── Pure-Rust helpers exposed for unit tests (no GPU required) ───────────────
+
+/// Format a single base-10000 block as decimal characters.
+///
+/// Block 0 is special: the spigot produces the integer part + 3 decimals
+/// (e.g. block_val=3141 → "3.141"). All subsequent blocks are zero-padded
+/// to exactly 4 characters.
+#[allow(dead_code)]
+pub fn format_decimal_block(block_val: u32, is_first: bool) -> String {
+    if is_first {
+        let d0 = block_val / 1000;
+        let rest = block_val % 1000;
+        format!("{}.{:03}", d0, rest)
+    } else {
+        format!("{:04}", block_val)
+    }
+}
+
+/// Trim a batch string so that the cumulative digit count never exceeds
+/// `max_digits`.
+///
+/// `digits_before` – how many digits (excluding the "3." prefix) were already
+/// written before this batch.  Returns a byte-aligned slice into `raw`.
+#[allow(dead_code)]
+pub fn trim_to_limit<'a>(raw: &'a str, digits_before: usize, max_digits: usize) -> &'a str {
+    if max_digits == 0 {
+        return "";
+    }
+    let available = max_digits.saturating_sub(digits_before);
+    if available == 0 || raw.is_empty() {
+        return "";
+    }
+    if raw.len() <= available {
+        raw
+    } else {
+        // Ensure we don't split inside a multi-byte character (all our output
+        // is ASCII digits, '.' and 0-9, so this is always safe, but be
+        // defensive anyway).
+        let mut end = available;
+        while !raw.is_char_boundary(end) {
+            end -= 1;
+        }
+        &raw[..end]
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const DECIMAL_SHADER: &str = r#"
 struct Config {
     total_blocks: u32,
@@ -67,7 +115,11 @@ pub struct DecimalCalculator {
     total_blocks: u32,
     blocks_per_batch: u32,
     completed_blocks: u32,
+    /// Running count of characters written (digits + the "3." prefix counted
+    /// as 1 digit for the integer part).
     total_digits_calculated: usize,
+    /// User-requested limit; enforced at output time in non-infinite mode.
+    target_digits: usize,
     base: u32,
     infinite: bool,
 
@@ -84,7 +136,8 @@ pub struct DecimalCalculator {
 impl DecimalCalculator {
     pub fn new(gpu: &GpuContext, target_digits: usize, batch_digits: usize, infinite: bool) -> Self {
         let base = 10000u32;
-        // If infinite, default to 20,000 digits capacity for immediate responsive output
+        // For infinite mode allocate a generous initial window; it will wrap
+        // internally and keep computing indefinitely.
         let effective_digits = if infinite {
             target_digits.max(20_000)
         } else {
@@ -208,6 +261,7 @@ impl DecimalCalculator {
             blocks_per_batch,
             completed_blocks: 0,
             total_digits_calculated: 0,
+            target_digits,
             base,
             infinite,
 
@@ -224,6 +278,11 @@ impl DecimalCalculator {
 
     pub fn compute_next_batch(&mut self, gpu: &GpuContext) -> Option<String> {
         if self.completed_blocks >= self.total_blocks {
+            return None;
+        }
+
+        // In fixed mode: stop early if we have already hit the target.
+        if !self.infinite && self.total_digits_calculated >= self.target_digits {
             return None;
         }
 
@@ -286,20 +345,21 @@ impl DecimalCalculator {
         gpu.device.poll(PollType::wait_indefinitely()).unwrap();
         receiver.recv().unwrap().unwrap();
 
-        let mut batch_digits = String::with_capacity((blocks_to_run * 4) as usize);
+        let mut batch_digits = String::with_capacity((blocks_to_run * 4) as usize + 2);
         {
             let data = buffer_slice.get_mapped_range().unwrap();
             let blocks: &[u32] = bytemuck::cast_slice(&data);
 
             for (i, &block_val) in blocks.iter().enumerate() {
                 let global_block = self.completed_blocks + i as u32;
+                let piece = format_decimal_block(block_val, global_block == 0);
+                batch_digits.push_str(&piece);
+
+                // Count digits contributed: block 0 gives "d.ddd" (3 decimal
+                // digits); others give 4 digits each.
                 if global_block == 0 {
-                    let d0 = block_val / 1000;
-                    let rest = block_val % 1000;
-                    batch_digits.push_str(&format!("{}.{:03}", d0, rest));
                     self.total_digits_calculated += 3;
                 } else {
-                    batch_digits.push_str(&format!("{:04}", block_val));
                     self.total_digits_calculated += 4;
                 }
             }
@@ -307,7 +367,32 @@ impl DecimalCalculator {
         self.staging_buf.unmap();
         self.completed_blocks += blocks_to_run;
 
-        Some(batch_digits)
+        // ── Digit-limit enforcement ──────────────────────────────────────────
+        // In non-infinite mode, the last batch may produce more characters
+        // than the user requested (the spigot works in blocks of 4).  Clamp
+        // the string *and* the running counter so callers always see the
+        // exact requested count.
+        if !self.infinite {
+            // `total_digits_calculated` has already been advanced; walk it
+            // back if we went over.
+            let excess = self.total_digits_calculated.saturating_sub(self.target_digits);
+            if excess > 0 {
+                self.total_digits_calculated = self.target_digits;
+                let new_len = batch_digits.len().saturating_sub(excess);
+                // Stay on a char boundary (all ASCII here, so always safe).
+                let mut cut = new_len;
+                while !batch_digits.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                batch_digits.truncate(cut);
+            }
+        }
+
+        if batch_digits.is_empty() {
+            None
+        } else {
+            Some(batch_digits)
+        }
     }
 
     pub fn total_digits(&self) -> usize {
@@ -319,6 +404,7 @@ impl DecimalCalculator {
             false
         } else {
             self.completed_blocks >= self.total_blocks
+                || self.total_digits_calculated >= self.target_digits
         }
     }
 }

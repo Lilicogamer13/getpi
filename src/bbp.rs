@@ -1,6 +1,48 @@
 use crate::gpu::GpuContext;
 use wgpu::*;
 
+// ── Pure-Rust helpers exposed for unit tests (no GPU required) ───────────────
+
+/// The 16 uppercase hex characters used for BBP output.
+pub const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Convert a raw BBP digit value (0–15) to its hex character.
+/// Panics in debug if `d >= 16`.
+#[allow(dead_code)]
+pub fn hex_digit_char(d: u32) -> char {
+    HEX_CHARS[(d & 0xF) as usize] as char
+}
+
+/// Given the index of the first digit in a batch (`start_index`) produce the
+/// "3." prefix string that must be prepended to the very first batch.
+#[allow(dead_code)]
+pub fn bbp_prefix(start_index: usize) -> &'static str {
+    if start_index == 0 { "3." } else { "" }
+}
+
+/// Trim a BBP batch string so total hex digits (excluding the "3." prefix)
+/// never exceeds `max_digits`.
+///
+/// `digits_before` – hex digits already written before this batch.
+#[allow(dead_code)]
+pub fn trim_bbp_to_limit<'a>(raw: &'a str, digits_before: usize, max_digits: usize) -> &'a str {
+    if max_digits == 0 {
+        return "";
+    }
+    let available = max_digits.saturating_sub(digits_before);
+    if available == 0 || raw.is_empty() {
+        return "";
+    }
+    if raw.len() <= available {
+        raw
+    } else {
+        // All chars are ASCII, every boundary is valid.
+        &raw[..available]
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const BBP_SHADER: &str = r#"
 struct Config {
     start_index: u32,
@@ -224,17 +266,19 @@ impl BbpCalculator {
     }
 
     pub fn compute_next_batch(&mut self, gpu: &GpuContext) -> Option<String> {
+        // Fixed mode: bail out as soon as we have reached the target.
         if !self.infinite && self.completed_digits >= self.target_digits {
             return None;
         }
 
-        let remaining = if self.infinite {
+        // Clamp batch to remaining digits in fixed mode.
+        let count = if self.infinite {
             self.batch_size
         } else {
-            ((self.target_digits - self.completed_digits) as u32).min(self.batch_size)
+            let remaining = (self.target_digits - self.completed_digits) as u32;
+            remaining.min(self.batch_size)
         };
 
-        let count = remaining;
         if count == 0 {
             return None;
         }
@@ -284,21 +328,25 @@ impl BbpCalculator {
         gpu.device.poll(PollType::wait_indefinitely()).unwrap();
         receiver.recv().unwrap().unwrap();
 
+        // Build the output string.
+        // Capacity: prefix ("3.") + count hex chars.
         let mut batch_digits = String::with_capacity(count as usize + 2);
         {
             let data = buffer_slice.get_mapped_range().unwrap();
             let digits: &[u32] = bytemuck::cast_slice(&data);
 
+            // Prepend "3." only on the very first batch.
             if self.completed_digits == 0 {
                 batch_digits.push_str("3.");
             }
 
-            const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
             for &d in digits.iter().take(count as usize) {
-                batch_digits.push(HEX_CHARS[(d & 0xF) as usize] as char);
+                batch_digits.push(hex_digit_char(d));
             }
         }
         self.staging_buf.unmap();
+
+        // Advance counter by exactly `count` (already clamped to remaining).
         self.completed_digits += count as usize;
 
         Some(batch_digits)

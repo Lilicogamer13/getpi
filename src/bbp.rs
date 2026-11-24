@@ -52,6 +52,9 @@ struct Config {
 @group(0) @binding(0) var<uniform> config: Config;
 @group(0) @binding(1) var<storage, read_write> out_digits: array<u32>;
 
+// Fast modular multiplication (a * b) % m using 32-bit math without full long-division loops when possible.
+// For small m (<= 65535), standard 32-bit (a * b) % m is exact and single-cycle on GPU.
+// For larger m, a 4-bit unrolled binary modular multiplication is used to minimize branch divergence on SIMD warps.
 fn mul_mod(a: u32, b: u32, m: u32) -> u32 {
     if (m <= 65535u) {
         return (a * b) % m;

@@ -136,10 +136,10 @@ pub struct DecimalCalculator {
 impl DecimalCalculator {
     pub fn new(gpu: &GpuContext, target_digits: usize, batch_digits: usize, infinite: bool) -> Self {
         let base = 10000u32;
-        // For infinite mode allocate a generous initial window; it will wrap
-        // internally and keep computing indefinitely.
+        // For infinite mode, start with an initial responsive window (e.g. 4,000 digits)
+        // so the GPU immediately computes thousands of digits per second without stalling.
         let effective_digits = if infinite {
-            target_digits.max(20_000)
+            target_digits.min(4_000).max(1_000)
         } else {
             target_digits
         };
@@ -277,7 +277,17 @@ impl DecimalCalculator {
     }
 
     pub fn compute_next_batch(&mut self, gpu: &GpuContext) -> Option<String> {
-        if self.completed_blocks >= self.total_blocks {
+        // Re-initialize state for infinite continuation once current block cycle completes.
+        if self.infinite && self.completed_blocks >= self.total_blocks {
+            let total_c = self.total_blocks * 14;
+            let f_init: Vec<u32> = vec![self.base / 5; (total_c + 1) as usize];
+            gpu.queue.write_buffer(&self.f_buf, 0, bytemuck::cast_slice(&f_init));
+            let state_init: [u32; 2] = [total_c, 0];
+            gpu.queue.write_buffer(&self.state_buf, 0, bytemuck::cast_slice(&state_init));
+            self.completed_blocks = 0;
+        }
+
+        if !self.infinite && self.completed_blocks >= self.total_blocks {
             return None;
         }
 

@@ -28,7 +28,7 @@ enum Mode {
 #[derive(Parser, Debug)]
 #[command(
     name = "getpi",
-    author = "Antigravity Team",
+    author = "Lio",
     version = "0.1.0",
     about = "Super-optimized GPU-native Pi Calculator for any GPU vendor (NVIDIA, AMD, Intel, Apple Silicon)"
 )]
